@@ -29,6 +29,44 @@ const registerOrganization = async ({
     const emailOtp = generateOtp();
     const emailOtpExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
 
+    // Fetch permissions OUTSIDE transaction to reduce transaction duration
+    const allPermissions = await prisma.permission.findMany();
+    const permMap = {};
+    for (const p of allPermissions) permMap[p.name] = p.id;
+
+    const roleDefs = [
+        {
+            name: "ADMIN",
+            description: "Full access \u2014 tenant administrator",
+            perms: Object.keys(permMap)
+        },
+        {
+            name: "MANAGER",
+            description: "Manage projects, tasks and view team",
+            perms: [
+                "project:create", "project:read", "project:update",
+                "task:create", "task:read", "task:update", "task:delete",
+                "user:read", "user:manage", "analytics:read"
+            ]
+        },
+        {
+            name: "MEMBER",
+            description: "Work on assigned tasks and view projects",
+            perms: [
+                "project:read",
+                "task:create", "task:read", "task:update",
+                "user:read", "analytics:read"
+            ]
+        },
+        {
+            name: "VIEWER",
+            description: "Read-only access to projects and tasks",
+            perms: [
+                "project:read", "task:read", "user:read", "analytics:read"
+            ]
+        }
+    ];
+
     const result = await prisma.$transaction(async (tx) => {
         const tenant = await tx.tenant.create({
             data: {
@@ -39,45 +77,6 @@ const registerOrganization = async ({
                     .replace(/^-|-$/g, "")
             }
         });
-
-        // Fetch all global permissions
-        const allPermissions = await tx.permission.findMany();
-        const permMap = {};
-        for (const p of allPermissions) permMap[p.name] = p.id;
-
-        // Define 4 default roles with their permission sets
-        const roleDefs = [
-            {
-                name: "ADMIN",
-                description: "Full access — tenant administrator",
-                perms: Object.keys(permMap)  // all permissions
-            },
-            {
-                name: "MANAGER",
-                description: "Manage projects, tasks and view team",
-                perms: [
-                    "project:create", "project:read", "project:update",
-                    "task:create", "task:read", "task:update", "task:delete",
-                    "user:read", "user:manage", "analytics:read"
-                ]
-            },
-            {
-                name: "MEMBER",
-                description: "Work on assigned tasks and view projects",
-                perms: [
-                    "project:read",
-                    "task:create", "task:read", "task:update",
-                    "user:read", "analytics:read"
-                ]
-            },
-            {
-                name: "VIEWER",
-                description: "Read-only access to projects and tasks",
-                perms: [
-                    "project:read", "task:read", "user:read", "analytics:read"
-                ]
-            }
-        ];
 
         const createdRoles = {};
         for (const def of roleDefs) {
@@ -90,13 +89,13 @@ const registerOrganization = async ({
             });
             createdRoles[def.name] = role;
 
-            for (const permName of def.perms) {
-                const permId = permMap[permName];
-                if (permId) {
-                    await tx.rolePermission.create({
-                        data: { roleId: role.id, permissionId: permId }
-                    });
-                }
+            // Batch insert all permissions at once (much faster)
+            const rolePermData = def.perms
+                .filter(pName => permMap[pName])
+                .map(pName => ({ roleId: role.id, permissionId: permMap[pName] }));
+
+            if (rolePermData.length > 0) {
+                await tx.rolePermission.createMany({ data: rolePermData });
             }
         }
 
@@ -116,7 +115,7 @@ const registerOrganization = async ({
         });
 
         return { tenant, user, role: adminRole };
-    });
+    }, { timeout: 30000 });
 
     // Send verification email (logs to console if SMTP not configured)
     const emailResult = await sendVerificationEmail({
