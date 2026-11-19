@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 
 const authRoutes = require("./auth/auth.routes");
 const projectRoutes = require("./routes/project.routes");
@@ -29,6 +30,26 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 
+// Request size limit — prevents large payload attacks
+app.use(express.json({ limit: "10kb" }));
+
+// Rate limiters
+const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100,                  // max 100 requests per 15 min
+    message: { success: false, message: "Too many requests, please try again after 15 minutes." }
+});
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20,                   // max 20 auth attempts per 15 min
+    message: { success: false, message: "Too many login attempts, please try again after 15 minutes." }
+});
+
+app.use("/api/v1", generalLimiter);
+app.use("/api/v1/auth/login", authLimiter);
+app.use("/api/v1/auth/register", authLimiter);
+
 app.use(cors({
     origin: function (origin, callback) {
         if (
@@ -46,8 +67,6 @@ app.use(cors({
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
-
-app.use(express.json());
 
 app.get("/api/v1/health", (req, res) => {
     res.status(200).json({

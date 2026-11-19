@@ -1,7 +1,15 @@
 const jwt = require("jsonwebtoken");
 
-const getAccessSecret = () => process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || "default_dev_access_secret_123!";
-const getRefreshSecret = () => process.env.JWT_REFRESH_SECRET || "default_dev_refresh_secret_456!";
+const getAccessSecret = () => {
+    const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+    if (!secret) throw new Error("JWT_ACCESS_SECRET is not set in environment variables");
+    return secret;
+};
+const getRefreshSecret = () => {
+    const secret = process.env.JWT_REFRESH_SECRET;
+    if (!secret) throw new Error("JWT_REFRESH_SECRET is not set in environment variables");
+    return secret;
+};
 
 const generateAccessToken = (payload) => {
     return jwt.sign(
